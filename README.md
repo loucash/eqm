@@ -13,15 +13,15 @@ or you can slow down the api responses to reflect system capabilities.
 
 This library protects consumers of the messages from being overloaded and
 moves the responsibility of how to deal with overflow to the edge of your
-system, on producers. On other words, `eqm` offers bounded message queue on
+system (producers). In other words, `eqm` offers bounded message queue on
 the subscriber side with a knowledge about available capacity on publisher side.
 
-It uses upstream demand channel. It means, that producers of messages knows
-about capabilities of consumers and they can't push more messages than
+It uses upstream demand channel. It means, that message producers know
+about consumers capabilities and they can't push more messages than
 consumers are able to process.
 
-The current code have extensive test cases (89% coverage), but it has not been used in production systems yet.
-If you use the system in production, I would very much like to hear about it.
+The current code has extensive test cases (89% coverage), but it has not been used in production systems yet.
+If you use `eqm` in production, I would very much like to hear about it.
 Especially if you encountered any problems while doing so.
 
 ## The Principles
@@ -63,14 +63,14 @@ Next, you need to start publisher:
 ```
 
 Publisher, without subscribers (or with full subscribers buffers) will return
-error:
+an error:
 
 ```erlang
 3> eqm_pub:post(Publisher, message).
 {error,no_capacity}
 ```
 
-There are two available context for posting a message:
+There are two available contexts when posting a message:
 
 * `sync` - a default one. Post message synchronously. This is the safe way where
 each call is factored through the `gen_server`.
@@ -109,7 +109,7 @@ And posting a message should be successful this time:
 ok
 ```
 
-Subscriber is a `gen_fsm` which implements very similar states as [pobox](https://github.com/ferd/pobox).
+Subscriber is a `gen_fsm` which implements states very similar to [pobox](https://github.com/ferd/pobox).
 When starting a subscriber first state is `notify`, so subscribers owner
 process will receive a message about new post and switch state to `passive`
 
@@ -156,15 +156,15 @@ ok
 {ok,50}
 ```
 
-There are two ways to stop subscriber. First is you can just stop subscriber
-and loose all the messages in buffer:
+There are two ways to stop a subscriber. First, you can just stop subscriber
+and lose all the messages in buffer:
 
 ```erlang
 18> eqm:stop_subscriber(Subscriber).
 ok
 ```
 
-Or you can cancel subscription and receive all the messages from buffer before
+Or you can cancel subscription and receive all the messages from the buffer before
 subscriber stops:
 
 ```erlang
