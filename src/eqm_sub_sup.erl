@@ -10,7 +10,7 @@
 start_link() ->
     supervisor:start_link(?MODULE, []).
 
--spec start_subscriber(eqm_pub:pub(), pid(), pos_integer(), notify | passive) ->
+-spec start_subscriber(eqm_pub:pub(), pid(), pos_integer(), notify | notify_full | passive) ->
     {ok, eqm_sub:subscriber()}.
 start_subscriber(Publisher, Owner, Size, StateName) ->
     {ok, _} = supervisor:start_child(

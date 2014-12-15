@@ -50,7 +50,8 @@ start_subscriber(Publisher, Size) ->
     start_subscriber(Publisher, Size, notify).
 
 %% @doc Starts subscriber which subscribes to publisher.
--spec start_subscriber(pub(), pos_integer(), notify | passive) -> {ok, subscriber()}.
+-spec start_subscriber(pub(), pos_integer(), notify | notify_full | passive) ->
+    {ok, subscriber()}.
 start_subscriber(Publisher, Size, StateName) ->
     eqm_sub_sup:start_subscriber(Publisher, self(), Size, StateName).
 

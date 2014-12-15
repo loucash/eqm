@@ -222,6 +222,8 @@ or pull request. Thank you!
 
 ## Changelog
 
+- 1.1.0: add new state `notify_full` to subscriber - owner will receive a
+  message when buffer is full
 - 1.0.0: Initial Release
 
 ## Authors
