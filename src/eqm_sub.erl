@@ -13,6 +13,7 @@
 -export([start_link/4]).
 -export([cancel/1,
          notify/1,
+         notify_full/1,
          active/1,
          info/1,
          stop/1,
@@ -29,6 +30,7 @@
 %% Fsm states
 -export([wait/2,
          notify/2,
+         notify_full/2,
          passive/2,
          active/2,
          cancel_wait/2]).
@@ -53,7 +55,7 @@
           owner_mon         :: reference(),
           subscription      :: eqm_pub:subscription(),
           buf               :: buffer(),
-          start_state       :: notify | passive
+          start_state       :: notify | notify_full | passive
          }).
 -type state()   :: #state{}.
 
@@ -85,6 +87,13 @@ cancel(Sub) ->
 notify(Sub) ->
     gen_fsm:send_event(pid(Sub), notify).
 
+%% @doc Forces the buffer into its notify_full state, where it will send a
+%% message alerting the Owner of full buffer before going back to the passive
+%% state.
+-spec notify_full(subscriber()) -> ok.
+notify_full(Sub) ->
+    gen_fsm:send_event(pid(Sub), notify_full).
+
 %% @doc Forces the buffer into an active state where it will
 %% send the data it has accumulated.
 -spec active(subscriber()) -> ok.
@@ -97,7 +106,8 @@ resize(Sub, Size) when Size >= 0 ->
     gen_fsm:sync_send_all_state_event(pid(Sub), {resize, Size}).
 
 %% @doc Returns info about buffer, size and number of messages
--spec info(subscriber()) -> {ok, {non_neg_integer(), non_neg_integer()}}.
+-spec info(subscriber()) -> {ok, [{max, non_neg_integer()} |
+                                  {size, non_neg_integer()}]}.
 info(Sub) ->
     gen_fsm:sync_send_all_state_event(pid(Sub), info).
 
@@ -171,6 +181,8 @@ notify(active, #state{buf=Buf}=State) ->
     end;
 notify(notify, State) ->
     {next_state, notify, State};
+notify(notify_full, State) ->
+    {next_state, notify_full, State};
 notify({post, Msg}, #state{buf=Buf}=State) ->
     send_notification(State#state{buf=buf_insert(Msg, Buf)});
 notify(cancel, #state{subscription=Subscription}=State) ->
@@ -184,10 +196,41 @@ notify(_Msg, State) ->
     {next_state, notify, State}.
 
 %% @private
+notify_full(active, #state{buf=Buf}=State) ->
+    case buf_size(Buf) of
+        0 -> {next_state, active, State};
+        N when N > 0 -> send(State)
+    end;
+notify_full(notify_full, State) ->
+    {next_state, notify_full, State};
+notify_full({post, Msg}, #state{buf=Buf0}=State) ->
+    Buf1 = buf_insert(Msg, Buf0),
+    case is_buf_full(Buf1) of
+        true ->
+            send_notification_full(State#state{buf=Buf1});
+        false ->
+            {next_state, notify_full, State#state{buf=Buf1}}
+    end;
+notify_full(cancel, #state{subscription=Subscription}=State) ->
+    ok = eqm_pub:cancel(Subscription),
+    {next_state, cancel_wait, State};
+notify_full(stop, #state{subscription=Subscription}=State) ->
+    ok = eqm_pub:cancel(Subscription),
+    {stop, normal, State};
+notify_full(_Msg, State) ->
+    % unexpected
+    {next_state, notify_full, State}.
+
+%% @private
 passive(notify, #state{buf=Buf}=State) ->
     case buf_size(Buf) of
         0 -> {next_state, notify, State};
         N when N > 0 -> send_notification(State)
+    end;
+passive(notify_full, #state{buf=Buf}=State) ->
+    case is_buf_full(Buf) of
+        true -> send_notification_full(State);
+        false -> {next_state, notify_full, State}
     end;
 passive(active, #state{buf=Buf}=State) ->
     case buf_size(Buf) of
@@ -243,9 +286,7 @@ handle_event(_Event, StateName, State) ->
 handle_sync_event({resize, NewSize}, _From, StateName, #state{buf=#buf{max=OldSize}=Buf}=State) ->
     {reply, ok, StateName, request(NewSize-OldSize, State#state{buf=buf_resize(NewSize, Buf)})};
 handle_sync_event(info, _From, StateName, #state{buf=#buf{max=Max, size=Size}}=State) ->
-    Info = [{max,Max},
-            {size,Size}],
-    Reply = {ok, Info},
+    Reply = {ok, [{max,Max}, {size,Size}]},
     {reply, Reply, StateName, State};
 handle_sync_event(_Event, _From, StateName, State) ->
     Reply = ok,
@@ -300,6 +341,11 @@ buf_insert(Msg, #buf{data=Q, size=Size}=Buf) ->
     Buf#buf{data=queue:in(Msg, Q), size=Size+1}.
 
 %% @private
+-spec is_buf_full(buffer()) -> boolean().
+is_buf_full(#buf{size=S, max=M}) when S >= M -> true;
+is_buf_full(_Buf) -> false.
+
+%% @private
 -spec send(state()) -> {next_state, atom(), state()}.
 send(#state{buf=#buf{data=Q, size=Size, max=Max}, owner=Owner}=State) ->
     Msgs = queue:to_list(Q),
@@ -308,14 +354,15 @@ send(#state{buf=#buf{data=Q, size=Size, max=Max}, owner=Owner}=State) ->
 
 %% @private
 -spec send_notification(state()) -> {next_state, atom(), state()}.
-send_notification(State) ->
-    send_notification(passive, State).
+send_notification(#state{owner=Owner}=State) ->
+    Owner ! {mail, self(), new_data},
+    {next_state, passive, State}.
 
 %% @private
--spec send_notification(atom(), state()) -> {next_state, atom(), state()}.
-send_notification(NextState, #state{owner=Owner}=State) ->
-    Owner ! {mail, self(), new_data},
-    {next_state, NextState, State}.
+-spec send_notification_full(state()) -> {next_state, atom(), state()}.
+send_notification_full(#state{owner=Owner}=State) ->
+    Owner ! {mail, self(), buffer_full},
+    {next_state, passive, State}.
 
 %% @private
 -spec send_cancelled(state()) -> {stop, normal, state()}.

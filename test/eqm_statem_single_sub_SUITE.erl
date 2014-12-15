@@ -14,6 +14,7 @@
          weight/3]).
 -export([starting/1,
          notify/1,
+         notify_full/1,
          passive/1,
          active/1]).
 -export([all/0, suite/0, init_per_suite/1, end_per_suite/1]).
@@ -91,15 +92,27 @@ starting(_S) ->
     ++ common_commands().
 
 notify(#state{subscriber=Sub, publisher=Pub}) ->
-    [{history,  {call,?SUB,info,[Sub]}},
-     {history,  {call,?SUB,notify,[Sub]}},
-     {history,  {call,?SUB,resize,[Sub,demand()]}},
-     {starting, {call,?SUB,stop,[Sub]}},
-     {starting, {call,?APP,stop_subscriber,[Sub]}},
+    [{history,      {call,?SUB,info,[Sub]}},
+     {history,      {call,?SUB,notify,[Sub]}},
+     {notify_full,  {call,?SUB,notify_full,[Sub]}},
+     {history,      {call,?SUB,resize,[Sub,demand()]}},
+     {starting,     {call,?SUB,stop,[Sub]}},
+     {starting,     {call,?APP,stop_subscriber,[Sub]}},
+     {starting,     {call,?SUB,cancel,[Sub]}},
+     {active,       {call,?SUB,active,[Sub]}},
+     {passive,      {call,?SUB,active,[Sub]}},
+     {passive,      {call,?PUB,post,[Pub, message()]}}]
+    ++ common_commands().
+
+notify_full(#state{subscriber=Sub, publisher=Pub}) ->
+    [{active,  {call,?SUB,active,[Sub]}},
+     {passive, {call,?SUB,active,[Sub]}},
+     {history, {call,?SUB,notify_full,[Sub]}},
+     {history, {call,?PUB,post,[Pub,message()]}},
+     {passive, {call,?PUB,post,[Pub,message()]}},
      {starting, {call,?SUB,cancel,[Sub]}},
-     {active,   {call,?SUB,active,[Sub]}},
-     {passive,  {call,?SUB,active,[Sub]}},
-     {passive,  {call,?PUB,post,[Pub, message()]}}]
+     {starting, {call,?SUB,stop,[Sub]}},
+     {starting, {call,?APP,stop_subscriber,[Sub]}}]
     ++ common_commands().
 
 passive(#state{subscriber=Sub, publisher=Pub}) ->
@@ -111,7 +124,9 @@ passive(#state{subscriber=Sub, publisher=Pub}) ->
      {starting, {call,?SUB,stop,[Sub]}},
      {starting, {call,?APP,stop_subscriber,[Sub]}},
      {starting, {call,?SUB,cancel,[Sub]}},
-     {history, {call,?PUB,post,[Pub,message()]}}]
+     {history, {call,?PUB,post,[Pub,message()]}},
+     {history, {call,?SUB,notify_full,[Sub]}},
+     {notify_full, {call,?SUB,notify_full,[Sub]}}]
     ++ common_commands().
 
 active(#state{subscriber=Sub, publisher=Pub}) ->
@@ -134,6 +149,26 @@ precondition(notify, passive, #state{sub_q=Q}, {call,_,active,[_]}) ->
         0 -> false;
         _ -> true
     end;
+precondition(notify_full, active, #state{sub_q=Q}, {call,_,active,[_]}) ->
+    case queue:len(Q) of
+        0 -> true;
+        _ -> false
+    end;
+precondition(notify_full, passive, #state{sub_q=Q}, {call,_,active,[_]}) ->
+    case queue:len(Q) of
+        0 -> false;
+        _ -> true
+    end;
+precondition(notify_full, notify_full, #state{sub_q=Q, sub_max=Max}, {call,_,post,[_,_]}) ->
+    case queue:len(Q) of
+        Len when Len+1 < Max -> true;
+        _ -> false
+    end;
+precondition(notify_full, passive, #state{sub_q=Q, sub_max=Max}, {call,_,post,[_,_]}) ->
+    case queue:len(Q) of
+        Len when Len+1 >= Max -> true;
+        _ -> false
+    end;
 precondition(passive, notify, #state{sub_q=Q}, {call,_,notify,[_]}) ->
     case queue:len(Q) of
         0 -> true;
@@ -154,6 +189,16 @@ precondition(passive, passive, #state{sub_q=Q}, {call,_,active,[_]}) ->
         0 -> false;
         _ -> true
     end;
+precondition(passive, passive, #state{sub_q=Q, sub_max=Max}, {call,_,notify_full,[_]}) ->
+    case queue:len(Q) of
+        Len when Len >= Max -> true;
+        _ -> false
+    end;
+precondition(passive, notify_full, #state{sub_q=Q, sub_max=Max}, {call,_,notify_full,[_]}) ->
+    case queue:len(Q) of
+        Len when Len < Max -> true;
+        _ -> false
+    end;
 precondition(_From, _To, #state{pub_capacity=0}, {call,_,post,[_,_]}) ->
     false;
 precondition(_From, _To, _S, _Call) ->
@@ -167,6 +212,10 @@ next_state_data(notify,passive,#state{pub_capacity=C, sub_q=Q}=S,_Res,{call,_,po
     S#state{pub_capacity=C-1, sub_q=queue:in(Msg, Q)};
 next_state_data(notify,passive,#state{pub_capacity=C, sub_q=Q}=S,_Res,{call,_,active,[_]}) ->
     S#state{pub_capacity=C+queue:len(Q), sub_q=queue:new()};
+next_state_data(notify_full,passive,#state{pub_capacity=C, sub_q=Q}=S,_Res,{call,_,active,[_]}) ->
+    S#state{pub_capacity=C+queue:len(Q), sub_q=queue:new()};
+next_state_data(notify_full,_,#state{pub_capacity=C, sub_q=Q}=S,_Res,{call,_,post,[_,Msg]}) ->
+    S#state{pub_capacity=C-1, sub_q=queue:in(Msg, Q)};
 next_state_data(passive,passive,#state{pub_capacity=C, sub_q=Q}=S,_Res,{call,_,post,[_,Msg]}) ->
     S#state{pub_capacity=C-1, sub_q=queue:in(Msg, Q)};
 next_state_data(passive,passive,#state{pub_capacity=C, sub_q=Q}=S,_Res,{call,_,active,[_]}) ->
@@ -193,16 +242,32 @@ postcondition(starting, notify, _S, {call,_,start_subscriber,[_,_]}, _Res) ->
     true;
 postcondition(notify, notify, _S, {call,_,notify,[_]}, _Res) ->
     true;
+postcondition(notify, notify_full, _S, {call,_,notify_full,[_]}, _Res) ->
+    true;
 postcondition(notify, passive, S, {call,_,post,[_,_]}, _Res) ->
     ok =:= await_notification(S);
 postcondition(notify, active, _S, {call,_,active,[_]}, _Res) ->
     true;
 postcondition(notify, passive, #state{sub_q=Q}, {call,_,active,[_]}, _Res) ->
     ok =:= await_msgs(queue:to_list(Q));
+postcondition(notify_full, active, _S, {call,_,active,[_]}, _Res) ->
+    true;
+postcondition(notify_full, passive, #state{sub_q=Q}, {call,_,active,[_]}, _Res) ->
+    ok =:= await_msgs(queue:to_list(Q));
+postcondition(notify_full, notify_full, _S, {call,_,notify_full,[_]}, _Res) ->
+    true;
+postcondition(notify_full, notify_full, _S, {call,_,post,[_,_]}, _Res) ->
+    true;
+postcondition(notify_full, passive, S, {call,_,post,[_,_]}, _Res) ->
+    ok =:= await_notification_full(S);
 postcondition(passive, notify, _S, {call,_,notify,[_]}, _Res) ->
     true;
 postcondition(passive, passive, S, {call,_,notify,[_]}, _Res) ->
     ok =:= await_notification(S);
+postcondition(passive, notify_full, _S, {call,_,notify_full,[_]}, _Res) ->
+    true;
+postcondition(passive, passive, S, {call,_,notify_full,[_]}, _Res) ->
+    ok =:= await_notification_full(S);
 postcondition(passive, active, _S, {call,_,active,[_]}, _Res) ->
     true;
 postcondition(passive, passive, #state{sub_q=Q}, {call,_,active,[_]}, _Res) ->
@@ -230,6 +295,16 @@ await_notification(#state{subscriber=Sub}) ->
     SubPid = eqm_sub:pid(Sub),
     receive
         {mail, SubPid, new_data} ->
+            ok
+    after
+        500 ->
+            timeout
+    end.
+
+await_notification_full(#state{subscriber=Sub}) ->
+    SubPid = eqm_sub:pid(Sub),
+    receive
+        {mail, SubPid, buffer_full} ->
             ok
     after
         500 ->
