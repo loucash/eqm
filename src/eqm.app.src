@@ -1,6 +1,6 @@
 {application, eqm, [
  {description, "Erlang messaging with back pressure - supply demand equilibrium"},
- {vsn, "1.1.0"},
+ {vsn, "1.1.1"},
  {applications, [stdlib, kernel]},
  {registered, [eqm_topsup]},
  {mod, {eqm, []}}
