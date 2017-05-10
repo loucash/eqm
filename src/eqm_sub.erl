@@ -45,7 +45,7 @@
 
 -record(buf, {max       :: non_neg_integer(),
               size = 0  :: non_neg_integer(),
-              data      :: queue()}).
+              data      :: queue:queue()}).
 -type buffer()  :: #buf{}.
 
 -record(state, {
